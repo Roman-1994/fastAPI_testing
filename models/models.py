@@ -38,3 +38,8 @@ class Feedback(BaseModel):
 class Password(BaseModel):
     username: str
     password: str
+
+
+class Product(BaseModel):
+    name: str = (Field(min_length=3, max_length=10),)
+    price: int = Field(gt=0)

@@ -3,13 +3,15 @@ import uuid
 from typing import Annotated
 
 from fastapi import Cookie, Depends, FastAPI, Form, Header, HTTPException, Request, Response, status
-from fastapi.responses import FileResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi_babel import Babel, BabelConfigs, BabelMiddleware, _
 from itsdangerous import Signer
 
 import config
 from logger import logger
-from models.models import Feedback, Password, User, Worker
+from models.models import Feedback, Password, Product, User, Worker
 
 
 print(base64.b64encode(bytes("user1:pass1", "utf-8")))
@@ -17,11 +19,25 @@ print(base64.b64encode(bytes("user1:pass1", "utf-8")))
 app = FastAPI()
 security = HTTPBasic()
 
+# Создаем объект конфигурации для Babel:
+babel_configs = BabelConfigs(
+    ROOT_DIR=__file__,
+    BABEL_DEFAULT_LOCALE="en",  # Язык по умолчанию
+    BABEL_TRANSLATION_DIRECTORY="locales",  # Папка с переводами
+)
+
+# Инициализируем объект Babel с использованием конфигурации
+babel = Babel(configs=babel_configs)
+
+# Добавляем мидлварь, который будет устанавливать локаль для каждого запроса
+app.add_middleware(BabelMiddleware, babel_configs=babel_configs)
+
 
 @app.get("/")
 async def root():
     logger.info("Handling request to root endpoint")
     return FileResponse("start.html")
+    return {"message": _("Hello World")}
 
 
 @app.post("/calculate")
@@ -152,10 +168,11 @@ async def product_search(keyword: str, category: str = "", limit: int = 10):
 
 @app.get("/headers")
 async def get_headers(headers: Request):
-    if headers.headers["accept-language"]:
-        return {"user_agent": headers.headers["user-agent"], "accept_language": headers.headers["accept-language"]}
-    else:
-        return HTTPException(status_code=400, detail="Not headers accept_language")
+    if "Accept-Language" not in headers.headers:
+        raise HTTPException(
+            status_code=400, detail="Not headers accept_language", headers={"X-Error": "Not headers accept-language"}
+        )
+    return {"user_agent": headers.headers["user-agent"], "accept_language": headers.headers["accept-language"]}
 
 
 USER_DATA = [
@@ -179,5 +196,25 @@ def authenticate_user(credentials: HTTPBasicCredentials = Depends(security)):
 
 
 @app.get("/protected_resource/")
-def get_protected_resource(user: Password = Depends(authenticate_user)):
+async def get_protected_resource(user: Password = Depends(authenticate_user)):
     return {"message": "You have access to the protected resource!", "user_info": user}
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"message": "Invalid input", "errors": exc.errors()},
+    )
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    return JSONResponse(status_code=400, content={"error": "Manual validation failed", "message": str(exc)})
+
+
+@app.post("/prod")
+async def post_product(product: Product):
+    if len(product.name) < 3 or len(product.name) > 10:
+        raise ValueError("ERROR Len name product")
+    return {"message": "Added product", "product": product}
